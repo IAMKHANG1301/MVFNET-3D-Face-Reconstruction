@@ -38,21 +38,18 @@ print(time.time() -start)
 # tools.write_ply(os.path.join(options.save_dir, 'shape.ply'), faces3d[0], faces3d[1])
 
 preds_np = preds[0].detach().cpu().numpy()
-faces3d = tools.preds_to_shape(preds_np)
 
-# Bước 1: Lấy các thành phần cơ bản
+# Tạo hình khối 3D
+faces3d = tools.preds_to_shape(preds_np)
 vertices = faces3d[0]
 triangles = faces3d[1]
 
-# Bước 2: Lấy màu sắc từ ảnh Front (imgA đã được crop về 224x224)
-# Ở đây ta dùng imgA (Front) làm nguồn màu chính
+# GỌI HÀM LẤY MÀU: Truyền vào ảnh imgA đã crop
 vertex_colors = tools.sample_texture(vertices, imgA, preds_np, view_idx=0)
 
-# Bước 3: Lưu file PLY kèm thông tin màu sắc
+# Lưu file PLY với tham số colors
 if not os.path.exists(options.save_dir):
     os.makedirs(options.save_dir)
 
 save_path = os.path.join(options.save_dir, 'shape_textured.ply')
 tools.write_ply(save_path, vertices, triangles, colors=vertex_colors)
-
-print(f"Đã xuất mô hình 3D có màu tại: {save_path}")

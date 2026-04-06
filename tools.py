@@ -192,35 +192,33 @@ def describe_element(name, df):
     return element
 
 def sample_texture(face_shape, image, preds, view_idx=0):
-    """
-    Lấy màu sắc cho các đỉnh từ ảnh đầu vào.
-    view_idx: 0 (Front), 1 (Left), 2 (Right) tương ứng với cách sắp xếp trong model.py
-    """
-    # Chuyển ảnh PIL sang numpy array để lấy pixel
-    img_np = np.array(image)
+    # Đảm bảo ảnh là PIL RGB và lấy pixel dạng numpy uint8 [0-255]
+    img_np = np.array(image.convert('RGB'))
     h, w, _ = img_np.shape
 
-    # Lấy Pose tương ứng (228 tham số 3DMM + 7 tham số cho mỗi View) [cite: 130]
-    # View A (Front): 228 -> 235
-    # View B (Left): 235 -> 242
-    # View C (Right): 242 -> 249
+    # Xác định vị trí Pose của góc nhìn tương ứng (0=Front, 1=Left, 2=Right)
     start_idx = 228 + (view_idx * 7)
-    R, t, s = preds_to_pose(preds[start_idx : start_idx + 7])
+    pose_slice = preds[start_idx : start_idx + 7]
 
-    # Chiếu các đỉnh 3D lên tọa độ 2D của ảnh [cite: 115, 116]
-    # Công thức: Pr = s * R * v + t
-    projected_2d = np.matmul(face_shape, s * R[:2].transpose()) + np.reshape(t, [1, 2])
+    # Chuyển đổi tham số dự đoán thành ma trận xoay, tịnh tiến
+    R, t2d, s = preds_to_pose(pose_slice)
+
+    # Chiếu đỉnh 3D lên mặt phẳng 2D
+    # Pr = s * R * v + t
+    projected = np.matmul(face_shape, s * R[:2].T) + t2d
     
-    # Đảo ngược trục Y để khớp với hệ tọa độ ảnh của tools.py
-    projected_2d[:, 1] = 224 - projected_2d[:, 1]
+    # Đảo trục Y để khớp với hệ tọa độ ảnh (gốc tọa độ trên-trái)
+    projected[:, 1] = 224 - projected[:, 1]
 
-    colors = []
-    for p in projected_2d:
-        x, y = int(round(p[0])), int(round(p[1]))
-        # Kiểm tra điểm có nằm trong ảnh không
-        if 0 <= x < w and 0 <= y < h:
-            colors.append(img_np[y, x])
-        else:
-            colors.append([127, 127, 127]) # Màu xám mặc định cho vùng ngoài ảnh
-            
-    return np.array(colors)
+    # Lấy tọa độ pixel gần nhất
+    coords = np.round(projected).astype(np.int32)
+    
+    # Cắt (clip) tọa độ để không vượt quá kích thước ảnh 224x224
+    coords[:, 0] = np.clip(coords[:, 0], 0, w - 1)
+    coords[:, 1] = np.clip(coords[:, 1], 0, h - 1)
+
+    # Lấy màu RGB tại các tọa độ đã chiếu [cite: 136]
+    colors = img_np[coords[:, 1], coords[:, 0]]
+    
+    # Trả về mảng uint8 để hàm write_ply nhận diện là 'uchar'
+    return colors.astype(np.uint8)
