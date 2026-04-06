@@ -190,3 +190,37 @@ def describe_element(name, df):
             element.append('property ' + f + ' ' + str(df.columns.values[i]))
 
     return element
+
+def sample_texture(face_shape, image, preds, view_idx=0):
+    """
+    Lấy màu sắc cho các đỉnh từ ảnh đầu vào.
+    view_idx: 0 (Front), 1 (Left), 2 (Right) tương ứng với cách sắp xếp trong model.py
+    """
+    # Chuyển ảnh PIL sang numpy array để lấy pixel
+    img_np = np.array(image)
+    h, w, _ = img_np.shape
+
+    # Lấy Pose tương ứng (228 tham số 3DMM + 7 tham số cho mỗi View) [cite: 130]
+    # View A (Front): 228 -> 235
+    # View B (Left): 235 -> 242
+    # View C (Right): 242 -> 249
+    start_idx = 228 + (view_idx * 7)
+    R, t, s = preds_to_pose(preds[start_idx : start_idx + 7])
+
+    # Chiếu các đỉnh 3D lên tọa độ 2D của ảnh [cite: 115, 116]
+    # Công thức: Pr = s * R * v + t
+    projected_2d = np.matmul(face_shape, s * R[:2].transpose()) + np.reshape(t, [1, 2])
+    
+    # Đảo ngược trục Y để khớp với hệ tọa độ ảnh của tools.py
+    projected_2d[:, 1] = 224 - projected_2d[:, 1]
+
+    colors = []
+    for p in projected_2d:
+        x, y = int(round(p[0])), int(round(p[1]))
+        # Kiểm tra điểm có nằm trong ảnh không
+        if 0 <= x < w and 0 <= y < h:
+            colors.append(img_np[y, x])
+        else:
+            colors.append([127, 127, 127]) # Màu xám mặc định cho vùng ngoài ảnh
+            
+    return np.array(colors)

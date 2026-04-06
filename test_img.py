@@ -34,5 +34,25 @@ input_tensor = torch.cat([imgA, imgB, imgC], 0).view(1, 9, 224, 224).cuda()
 start = time.time()
 preds = model(input_tensor)
 print(time.time() -start)
-faces3d = tools.preds_to_shape(preds[0].detach().cpu().numpy())
-tools.write_ply(os.path.join(options.save_dir, 'shape.ply'), faces3d[0], faces3d[1])
+# faces3d = tools.preds_to_shape(preds[0].detach().cpu().numpy())
+# tools.write_ply(os.path.join(options.save_dir, 'shape.ply'), faces3d[0], faces3d[1])
+
+preds_np = preds[0].detach().cpu().numpy()
+faces3d = tools.preds_to_shape(preds_np)
+
+# Bước 1: Lấy các thành phần cơ bản
+vertices = faces3d[0]
+triangles = faces3d[1]
+
+# Bước 2: Lấy màu sắc từ ảnh Front (imgA đã được crop về 224x224)
+# Ở đây ta dùng imgA (Front) làm nguồn màu chính
+vertex_colors = tools.sample_texture(vertices, imgA, preds_np, view_idx=0)
+
+# Bước 3: Lưu file PLY kèm thông tin màu sắc
+if not os.path.exists(options.save_dir):
+    os.makedirs(options.save_dir)
+
+save_path = os.path.join(options.save_dir, 'shape_textured.ply')
+tools.write_ply(save_path, vertices, triangles, colors=vertex_colors)
+
+print(f"Đã xuất mô hình 3D có màu tại: {save_path}")
