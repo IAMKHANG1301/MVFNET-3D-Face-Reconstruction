@@ -37,3 +37,25 @@ If you find this work useful in your research, please cite:
   year={2019}
 }
 ```
+
+5. HƯỚNG DẪN HUẤN LUYỆN
+Sử dụng lệnh sau để bắt đầu huấn luyện giai đoạn tiền huấn luyện (Pretraining):
+
+Lệnh mẫu:
+python train.py --data_root "đường/dẫn/đến/300W-LP" \
+                --save_dir "./checkpoints" \
+                --batch_size 12 \
+                --lr 1e-5 \
+                --epochs 10
+
+Các tham số mặc định (theo bài báo):
+- Optimizer: Adam[cite: 245].
+- Learning Rate: 1e-5 cho supervised, 1e-6 cho self-supervised[cite: 245].
+- Batch size: 12[cite: 245].
+- Lambda 3DMM: 1.0[cite: 246].
+- Lambda Pose: 10.0[cite: 246].
+
+6. QUY TRÌNH HUẤN LUYỆN 2 GIAI ĐOẠN
+- Bước 1 (Supervised): Huấn luyện trên 300W-LP để mô hình hội tụ cơ bản[cite: 183].
+- Bước 2 (Self-supervised): Huấn luyện trên Multi-PIE sử dụng Photo Loss và 
+  Align Loss để tinh chỉnh độ chính xác dựa trên ràng buộc đa góc nhìn

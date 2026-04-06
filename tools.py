@@ -67,7 +67,7 @@ def preds_to_shape(preds):
     
     
 def crop_image(image, res=224):
-    fa = face_alignment.FaceAlignment(face_alignment.LandmarksType._3D, flip_input=False)
+    fa = face_alignment.FaceAlignment(face_alignment.LandmarksType.THREE_D, flip_input=False)
     pts = fa.get_landmarks(np.array(image))
     if len(pts) < 1:
         assert "No face detected!"

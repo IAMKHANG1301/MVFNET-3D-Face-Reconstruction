@@ -1,0 +1,29 @@
+# Python - Các file biên dịch và bộ nhớ tạm
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+.venv/
+venv/
+ENV/
+env/
+
+# Editor 
+.vscode/
+
+# Dữ liệu và Kết quả 
+data/
+result/
+results/
+
+# Các tệp mô hình và tệp nén nặng
+*.pth
+*.ckpt
+*.zip
+*.rar
+*.7z
+
+# Log và tệp tạm
+*.log
+.DS_Store
