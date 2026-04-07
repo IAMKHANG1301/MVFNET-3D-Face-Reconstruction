@@ -6,6 +6,8 @@ from PIL import Image
 import pandas as pd
 import sys
 import math
+import matplotlib.pyplot as plt
+import os
 
 model_shape = io.loadmat('data/Model_Shape.mat')
 kpt_index = np.reshape(model_shape['keypoints'], 68).astype(np.int32) - 1
@@ -186,10 +188,65 @@ def describe_element(name, df):
     else:
         for i in range(len(df.columns)):
             # get first letter of dtype to infer format
-            f = property_formats[str(df.dtypes[i])[0]]
+            f = property_formats[str(df.dtypes.iloc[i])[0]]
             element.append('property ' + f + ' ' + str(df.columns.values[i]))
 
     return element
+
+def calculate_nme(pred_landmarks, gt_landmarks):
+    """Tính chỉ số Normalized Mean Error (NME)"""
+    # Tính kích thước bounding box từ ground truth
+    min_xy = np.min(gt_landmarks, axis=0)
+    max_xy = np.max(gt_landmarks, axis=0)
+    bbox_size = np.sqrt(np.prod(max_xy[:2] - min_xy[:2]))
+    
+    # Tính sai số
+    error = np.mean(np.linalg.norm(pred_landmarks[:, :2] - gt_landmarks[:, :2], axis=1))
+    return error / bbox_size
+
+def plot_ced_curve(nme_list, save_path='result/ced_curve.png'):
+    if not os.path.exists(os.path.dirname(save_path)):
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    errors = np.sort(nme_list)
+    ced = np.arange(1, len(errors) + 1) / len(errors)
+    
+    plt.figure(figsize=(8, 6))
+    plt.plot(errors, ced, linewidth=2.5, color='#e74c3c', label='MVF-Net (Our Model)')
+    plt.xlim([0, 0.1])
+    plt.ylim([0, 1.0])
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.title('Cumulative Error Distribution (CED) on AFLW2000-3D', fontsize=14)
+    plt.xlabel('Normalized Mean Error (NME)', fontsize=12)
+    plt.ylabel('Fraction of Images', fontsize=12)
+    plt.legend(loc='lower right', fontsize=12)
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"[*] Đã lưu biểu đồ CED Curve tại: {save_path}")
+
+def plot_error_by_yaw(nme_list, yaw_list, save_path='result/error_by_yaw.png'):
+    yaw_bins = {'[0, 30]': [], '[30, 60]': [], '[60, 90]': []}
+    for nme, yaw in zip(nme_list, yaw_list):
+        abs_yaw = abs(yaw) * (180.0 / np.pi) 
+        if abs_yaw <= 30: yaw_bins['[0, 30]'].append(nme)
+        elif abs_yaw <= 60: yaw_bins['[30, 60]'].append(nme)
+        else: yaw_bins['[60, 90]'].append(nme)
+            
+    categories = list(yaw_bins.keys())
+    means = [np.mean(yaw_bins[cat]) * 100 if yaw_bins[cat] else 0 for cat in categories]
+    
+    plt.figure(figsize=(8, 6))
+    bars = plt.bar(categories, means, color=['#2ecc71', '#3498db', '#9b59b6'], width=0.5)
+    plt.title('NME across Different Yaw Angles', fontsize=14)
+    plt.xlabel('Yaw Angle (Degrees)', fontsize=12)
+    plt.ylabel('Average NME (%)', fontsize=12)
+    for bar in bars:
+        yval = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2, yval + 0.05, f'{yval:.2f}%', ha='center', va='bottom', fontweight='bold')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"[*] Đã lưu biểu đồ NME by Yaw tại: {save_path}")
+
+
 
 def sample_texture(face_shape, image, preds, view_idx=0):
     # Đảm bảo ảnh là PIL RGB và lấy pixel dạng numpy uint8 [0-255]
@@ -204,7 +261,6 @@ def sample_texture(face_shape, image, preds, view_idx=0):
     R, t2d, s = preds_to_pose(pose_slice)
 
     # Chiếu đỉnh 3D lên mặt phẳng 2D
-    # Pr = s * R * v + t
     projected = np.matmul(face_shape, s * R[:2].T) + t2d
     
     # Đảo trục Y để khớp với hệ tọa độ ảnh (gốc tọa độ trên-trái)
@@ -217,8 +273,7 @@ def sample_texture(face_shape, image, preds, view_idx=0):
     coords[:, 0] = np.clip(coords[:, 0], 0, w - 1)
     coords[:, 1] = np.clip(coords[:, 1], 0, h - 1)
 
-    # Lấy màu RGB tại các tọa độ đã chiếu [cite: 136]
+    # Lấy màu RGB tại các tọa độ đã chiếu
     colors = img_np[coords[:, 1], coords[:, 0]]
     
-    # Trả về mảng uint8 để hàm write_ply nhận diện là 'uchar'
     return colors.astype(np.uint8)

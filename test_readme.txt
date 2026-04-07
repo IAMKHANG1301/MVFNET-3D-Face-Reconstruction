@@ -40,8 +40,6 @@ Sắp xếp cấu trúc thư mục 'data/' như sau:
     + data/AFLW2000/: Chứa ảnh và nhãn .mat của tập AFLW2000-3D.
     + data/Multi-PIE/: Chứa ảnh chụp đa góc nhìn của các đối tượng.
 
-Ngoài ra có thể tải full folder data mà nhóm em đã tích hợp sẵn từ đây: (https://drive.google.com/drive/folders/1ltjT1y9COBHCGQWTYLqnFznJ7Nf4J9EQ?usp=sharing)
-
 3. HƯỚNG DẪN KIỂM THỬ (INFERENCE)
 --------------------------------------------------------------------------
 3.1. Kiểm thử định lượng trên AFLW2000-3D

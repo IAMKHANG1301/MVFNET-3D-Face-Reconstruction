@@ -4,5 +4,7 @@ opencv-python
 pillow
 pandas
 torch
+scipy
 torchvision
 torchaudio
+matplotlib

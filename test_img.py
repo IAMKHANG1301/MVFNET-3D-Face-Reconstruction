@@ -26,7 +26,7 @@ imgC = transforms.functional.to_tensor(imgC)
 model = VggEncoder()
 model = torch.nn.DataParallel(model).cuda() 
 # model = model.to('cpu')
-ckpt = torch.load('data/net.pth')
+ckpt = torch.load('data/mvfnet_finetuned_best.pth')
 model.load_state_dict(ckpt)
 #print model
 input_tensor = torch.cat([imgA, imgB, imgC], 0).view(1, 9, 224, 224).cuda()
@@ -34,22 +34,22 @@ input_tensor = torch.cat([imgA, imgB, imgC], 0).view(1, 9, 224, 224).cuda()
 start = time.time()
 preds = model(input_tensor)
 print(time.time() -start)
-# faces3d = tools.preds_to_shape(preds[0].detach().cpu().numpy())
-# tools.write_ply(os.path.join(options.save_dir, 'shape.ply'), faces3d[0], faces3d[1])
+faces3d = tools.preds_to_shape(preds[0].detach().cpu().numpy())
+tools.write_ply(os.path.join(options.save_dir, 'shape.ply'), faces3d[0], faces3d[1])
 
-preds_np = preds[0].detach().cpu().numpy()
+# preds_np = preds[0].detach().cpu().numpy()
 
-# Tạo hình khối 3D
-faces3d = tools.preds_to_shape(preds_np)
-vertices = faces3d[0]
-triangles = faces3d[1]
+# # Tạo hình khối 3D
+# faces3d = tools.preds_to_shape(preds_np)
+# vertices = faces3d[0]
+# triangles = faces3d[1]
 
-# GỌI HÀM LẤY MÀU: Truyền vào ảnh imgA đã crop
-vertex_colors = tools.sample_texture(vertices, imgA, preds_np, view_idx=0)
+# # GỌI HÀM LẤY MÀU: Truyền vào ảnh imgA đã crop
+# vertex_colors = tools.sample_texture(vertices, imgA, preds_np, view_idx=0)
 
-# Lưu file PLY với tham số colors
-if not os.path.exists(options.save_dir):
-    os.makedirs(options.save_dir)
+# # Lưu file PLY với tham số colors
+# if not os.path.exists(options.save_dir):
+#     os.makedirs(options.save_dir)
 
-save_path = os.path.join(options.save_dir, 'shape_textured.ply')
-tools.write_ply(save_path, vertices, triangles, colors=vertex_colors)
+# save_path = os.path.join(options.save_dir, 'shape_textured.ply')
+# tools.write_ply(save_path, vertices, triangles, colors=vertex_colors)
