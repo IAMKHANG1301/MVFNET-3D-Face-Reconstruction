@@ -8,3 +8,7 @@ scipy
 torchvision
 torchaudio
 matplotlib
+ultralytics
+gfpgan
+trimesh
+facexlib

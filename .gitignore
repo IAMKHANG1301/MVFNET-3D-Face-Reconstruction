@@ -15,7 +15,7 @@ env/
 # Dữ liệu và Kết quả 
 data/
 result/
-results/
+gfspan/
 
 # Các tệp mô hình và tệp nén nặng
 *.pth
