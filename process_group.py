@@ -61,7 +61,7 @@ def process_group(input_path, out_dir, model_path, use_texture=False):
         # Tính toán tâm và kích thước để cắt khuôn mặt
         center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
         # Sử dụng hệ số 1.5 để đảm bảo lấy đủ phần đầu cho mô hình
-        size = int(max(x2 - x1, y2 - y1) * 1.5)
+        size = int(max(x2 - x1, y2 - y1) * 1.2)
         
         # Cắt và thay đổi kích thước ảnh về chuẩn 224x224
         face_crop = full_img.crop((int(center_x - size/2), int(center_y - size/2), 

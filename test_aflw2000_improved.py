@@ -1,17 +1,17 @@
-import torch  # Thư viện PyTorch để xử lý tensor
-import os  # Quản lý file và thư mục
-import glob  # Tìm kiếm đường dẫn file theo mô hình
-import scipy.io as sio  # Đọc file dữ liệu .mat của AFLW2000
-from PIL import Image, ImageDraw  # Xử lý hình ảnh
-import torchvision.transforms as transforms  # Chuyển đổi dữ liệu ảnh
-import numpy as np  # Xử lý mảng và toán học vector
-import matplotlib.pyplot as plt  # Vẽ biểu đồ và render mesh
-from model import VggEncoder  # Kiến trúc mạng MVFNet
-import tools  # Các hàm tiền xử lý và đo lường NME
-import time  # Đo thời gian chạy
-import cv2  # Xử lý ảnh OpenCV
-import io  # Xử lý luồng dữ liệu nhị phân
-import gc  # Giải phóng bộ nhớ
+import torch  
+import os 
+import glob  
+import scipy.io as sio  
+from PIL import Image, ImageDraw 
+import torchvision.transforms as transforms 
+import numpy as np  
+import matplotlib.pyplot as plt  
+from model import VggEncoder  
+import tools  
+import time  
+import cv2  
+import io  
+import gc  
 
 # Thiết lập đường dẫn dữ liệu và trọng số
 AFLW_DIR = './data/AFLW2000'

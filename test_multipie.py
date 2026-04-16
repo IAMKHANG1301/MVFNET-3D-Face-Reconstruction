@@ -1,4 +1,5 @@
 import torch
+import argparse
 import os
 import glob
 from PIL import Image, ImageDraw
@@ -10,35 +11,21 @@ import tools
 import time
 import io
 import gc
-import face_alignment
-
-# ==========================================
-# CẤU HÌNH ĐƯỜNG DẪN
-# ==========================================
-MULTI_PIE_DIR = './data/Multi-PIE' # Thư mục chứa ảnh Multi-PIE
-MODEL_PATH = './data/net.pth'
-NUM_SAMPLES = 4 # Số lượng người muốn vẽ
-SAVE_DIR = './result/Multi-PIE'
-# ==========================================
+from collections import defaultdict
 
 def render_3d_mesh_to_image(vertices, triangles, size=(224, 224), azim=0):
-    """
-    Render khối 3D MÀU XÁM TRƠN (Clay Render) kèm đổ bóng
-    """
+    # Khởi tạo khung vẽ 3D
     fig = plt.figure(figsize=(3, 3), dpi=100)
     ax = fig.add_subplot(111, projection='3d')
     
-    # CHUẨN HÓA TRỤC TỌA ĐỘ
-    X = vertices[:, 0]        
-    Y = vertices[:, 2]        
-    Z = vertices[:, 1]       
+    # Hiệu chỉnh tọa độ đỉnh
+    X = vertices[:, 0]         
+    Y = vertices[:, 2]         
+    Z = -vertices[:, 1]       
     
-    # Render lưới 3D màu xám nhạt kèm đổ bóng
+    # Vẽ bề mặt mesh màu xám
     ax.plot_trisurf(X, Y, Z, triangles=triangles, color='#bdc3c7', edgecolor='none')
-        
-    # ĐIỀU KHIỂN CAMERA QUAY THEO GÓC YÊU CẦU
     ax.view_init(elev=0, azim=azim) 
-    
     ax.set_box_aspect([1, 1, 1])
     ax.axis('off')
     
@@ -50,146 +37,130 @@ def render_3d_mesh_to_image(vertices, triangles, size=(224, 224), azim=0):
     img = Image.open(buf).convert('RGB')
     return img.resize(size, Image.Resampling.LANCZOS)
 
-def crop_image_with_ai(image, fa_model, res=224):
-    """Dùng AI tìm mặt, cắt ảnh và TÍNH LUÔN GÓC YAW bằng 3D Landmarks"""
-    pts = fa_model.get_landmarks(np.array(image))
-    if pts is None or len(pts) == 0:
-        return None, None, None, None, 0.0
-        
-    # Lấy tọa độ 3D đầy đủ (68, 3) từ FaceAlignment
-    pts_3d = np.array(pts[0])
-    
-    # ĐÃ FIX: Tính góc Yaw bằng mốc 3D của FaceAlignment (Chắc chắn có trục Z)
-    dx = pts_3d[16, 0] - pts_3d[0, 0]
-    dz = pts_3d[16, 2] - pts_3d[0, 2]
-    yaw_deg = np.arctan2(dz, dx) * 180.0 / np.pi
-    
-    # Chuyển về 2D nguyên để cắt ảnh
-    pts_2d = pts_3d.astype(np.int32)
-    h, w = image.size[1], image.size[0]
-    
-    # Bounding Box
-    x_max, x_min = np.max(pts_2d[:68, 0]), np.min(pts_2d[:68, 0])
-    y_max, y_min = np.max(pts_2d[:68, 1]), np.min(pts_2d[:68, 1])
-    
-    center_x = (x_min + x_max) / 2.0
-    center_y = (y_min + y_max) / 2.0 
-    center_y = center_y + (y_max - y_min) * 0.12 
-    
-    size = max(x_max - x_min, y_max - y_min) * 1.5
-    
-    left = center_x - size / 2.0
-    top = center_y - size / 2.0
-    right = center_x + size / 2.0
-    bottom = center_y + size / 2.0
-    
-    crop_img = image.crop((left, top, right, bottom))
-    crop_img = crop_img.resize((res, res), Image.BICUBIC)
-    
-    # Trả về 5 biến: Ảnh đã cắt, tọa độ X, tọa độ Y, Scale, và Góc Yaw
-    return crop_img, left, top, size, yaw_deg
-
 def main():
-    os.makedirs(SAVE_DIR, exist_ok=True)
-    
-    # 1. Khởi tạo mô hình MVF-Net
+    parser = argparse.ArgumentParser(description="Multi-PIE Triplet Evaluation")
+    parser.add_argument('--multi_pie_dir', type=str, default='./data/Multi-Pie', help='Path to Multi-Pie dataset')
+    parser.add_argument('--save_dir', type=str, default='./result/Multi-PIE', help='Directory to save results')
+    parser.add_argument('--num_samples', type=int, default=5, help='Number of subjects to process')
+    parser.add_argument('--textured', action='store_true', help='Enable texture sampling for PLY files')
+    args = parser.parse_args()
+
+    # Khởi tạo mô hình
+    print("Loading MVFNet model...")
     model = VggEncoder()
     model = torch.nn.DataParallel(model).cuda()
-    print(f"[*] Loading weights from: {MODEL_PATH}")
-    ckpt = torch.load(MODEL_PATH, weights_only=True)
-    model.load_state_dict(ckpt)
+    model.load_state_dict(torch.load('data/net.pth'))
     model.eval()
 
-    print(f"[*] Initializing FaceAlignment AI model to find Multi-PIE faces...")
-    import warnings
-    warnings.filterwarnings("ignore")
-    fa_model = face_alignment.FaceAlignment(face_alignment.LandmarksType.THREE_D, flip_input=False)
+    # Quét tất cả ảnh trong thư mục
+    img_pattern = os.path.join(args.multi_pie_dir, '**', '*.png')
+    all_files = glob.glob(img_pattern, recursive=True)
+    
+    # Nhóm ảnh theo Subject_Session_Expression để tìm bộ 3 camera
+    # Format: 001_01_01_041_05_crop_128.png -> Key: 001_01_01
+    triplets = defaultdict(dict)
+    camera_map = {'130': 'left', '051': 'front', '041': 'right'}
+    
+    for f in all_files:
+        basename = os.path.basename(f)
+        parts = basename.split('_')
+        if len(parts) < 4: continue
+        
+        # ID đối tượng và Camera ID
+        subject_key = "_".join(parts[:3]) 
+        cam_id = parts[3]
+        
+        if cam_id in camera_map:
+            triplets[subject_key][camera_map[cam_id]] = f
 
-    img_paths = glob.glob(os.path.join(MULTI_PIE_DIR, '**', '*.jpg'), recursive=True) + \
-                glob.glob(os.path.join(MULTI_PIE_DIR, '**', '*.png'), recursive=True)
-                
-    if len(img_paths) == 0:
-        print(f"[!] No images found at '{MULTI_PIE_DIR}'")
+    # Lọc ra những nhóm có đủ 3 ảnh
+    valid_keys = [k for k, v in triplets.items() if len(v) == 3]
+    
+    if not valid_keys:
+        print(f"Error: No valid triplets (130, 051, 041) found in {args.multi_pie_dir}")
         return
-    
-    # Lấy ngẫu nhiên các ảnh để Visualize
+
+    # Chọn ngẫu nhiên các đối tượng
     np.random.seed(42)
-    selected_paths = np.random.choice(img_paths, NUM_SAMPLES, replace=False)
+    selected_keys = np.random.choice(valid_keys, min(len(valid_keys), args.num_samples), replace=False)
     
-    print(f"[*] Starting Visualization generation for {NUM_SAMPLES} Multi-PIE images...")
-    
+    print(f"Processing {len(selected_keys)} subjects with full triplets...")
     row_images = []
-    
-    for img_path in selected_paths:
-        img = Image.open(img_path).convert('RGB')
-        
-        # Cắt ảnh và nhận trực tiếp góc Yaw
-        img_crop, _, _, _, yaw_deg = crop_image_with_ai(img, fa_model)
-        if img_crop is None:
-            print(f"  -> Skipping image (No face detected by AI): {os.path.basename(img_path)}")
-            continue
 
-        img_tensor = transforms.functional.to_tensor(img_crop)
-        
-        # Kích hoạt chế độ Single-View
-        input_tensor = torch.cat([img_tensor, img_tensor, img_tensor], 0).view(1, 9, 224, 224).cuda()
+    for idx, key in enumerate(selected_keys):
+        sample_id = f"subject_{key}"
+        sample_dir = os.path.join(args.save_dir, sample_id)
+        debug_dir = os.path.join(sample_dir, 'debug')
+        for d in [sample_dir, debug_dir]:
+            if not os.path.exists(d): os.makedirs(d)
 
+        paths = triplets[key]
+        processed_tensors = []
+        enhanced_imgs = {}
+
+        # Tiền xử lý lần lượt: Front, Left, Right để đưa vào MVFNet
+        for view in ['front', 'left', 'right']:
+            img = Image.open(paths[view]).convert('RGB')
+            
+            # Sử dụng YOLO để chuẩn hóa vùng cắt
+            img_crop, *coords = tools.crop_image_yolo(img)
+            if img_crop is None: img_crop = img.resize((224, 224))
+            
+            # Làm nét ảnh bằng GFPGAN
+            img_enhanced = tools.enhance_face(img_crop)
+            img_enhanced.save(os.path.join(debug_dir, f"{view}_enhanced.jpg"))
+            
+            enhanced_imgs[view] = img_enhanced
+            processed_tensors.append(transforms.functional.to_tensor(img_enhanced))
+
+        # Chạy Inference MVFNet với đầu vào 3 ảnh (9 kênh)
+        input_tensor = torch.cat(processed_tensors, 0).view(1, 9, 224, 224).cuda()
         with torch.no_grad():
             preds = model(input_tensor)
 
-        preds_numpy = preds[0].cpu().numpy()
-        faces3d = tools.preds_to_shape(preds_numpy)
+        preds_np = preds[0].cpu().numpy()
+        vertices, triangles, *landmarks = tools.preds_to_shape(preds_np)
+        vertices = tools.refine_mesh(vertices, triangles)
+
+        # Lưu file .ply
+        colors = None
+        if args.textured:
+            # Lấy màu từ bộ 3 ảnh đã làm nét
+            imgs_list = [enhanced_imgs['front'], enhanced_imgs['left'], enhanced_imgs['right']]
+            colors = tools.sample_texture_fusion(vertices, triangles, imgs_list, preds_np)
         
-        # Chỉnh lại size ảnh gốc để ghép chuẩn
-        img_original_resized = img.resize((224, 224), Image.Resampling.LANCZOS)
+        tools.write_ply(os.path.join(sample_dir, "result.ply"), vertices, triangles, colors=colors)
+
+        # Render 3 góc nhìn 3D
+        mesh_l = render_3d_mesh_to_image(vertices, triangles, azim=-60)
+        mesh_f = render_3d_mesh_to_image(vertices, triangles, azim=0)
+        mesh_r = render_3d_mesh_to_image(vertices, triangles, azim=60)
         
-        # Bù trừ góc xoay Camera (Camera Tracking)
-        azim_left = 70 - yaw_deg    
-        azim_front = 0 - yaw_deg    
-        azim_right = -70 - yaw_deg  
-        
-        # Render thẳng 3 góc độ với lưới xám trơn cùng camera bù trừ
-        mesh_left = render_3d_mesh_to_image(faces3d[0], faces3d[1], size=(224, 224), azim=azim_left)
-        mesh_front = render_3d_mesh_to_image(faces3d[0], faces3d[1], size=(224, 224), azim=azim_front)
-        mesh_right = render_3d_mesh_to_image(faces3d[0], faces3d[1], size=(224, 224), azim=azim_right)
-        
-        # Ghép thành 1 hàng ngang (Chiều rộng = 224 * 4)
+        # In ảnh báo cáo: Lấy ảnh gốc là Front
+        front_orig = enhanced_imgs['front'].resize((224, 224), Image.Resampling.LANCZOS)
         row = Image.new('RGB', (224 * 4, 224), color='white')
-        row.paste(img_original_resized, (0, 0))
-        row.paste(mesh_left, (224, 0))
-        row.paste(mesh_front, (448, 0))
-        row.paste(mesh_right, (672, 0))
-        
+        row.paste(front_orig, (0, 0))
+        row.paste(mesh_l, (224, 0))
+        row.paste(mesh_f, (448, 0))
+        row.paste(mesh_r, (672, 0))
         row_images.append(row)
-        img.close()
         gc.collect()
 
-    if not row_images:
-        print("[!] No images processed successfully.")
-        return
-
-    # Thêm dải Tiêu đề ở trên cùng
+    # Tạo Header và lưu ảnh tổng hợp
     header = Image.new('RGB', (224 * 4, 40), color='#f0f0f0')
     draw = ImageDraw.Draw(header)
-    
-    draw.text((80, 10), "ORIGINAL", fill="black")
-    draw.text((224 + 70, 10), "LEFT PROFILE", fill="black")
-    draw.text((448 + 80, 10), "FRONTAL", fill="black")
-    draw.text((672 + 70, 10), "RIGHT PROFILE", fill="black")
+    draw.text((60, 10), "ORIGINAL (FRONT-ENHANCED)", fill="black")
+    draw.text((224 + 70, 10), "3D LEFT VIEW", fill="black")
+    draw.text((448 + 80, 10), "3D FRONTAL", fill="black")
+    draw.text((672 + 70, 10), "3D RIGHT VIEW", fill="black")
 
-    # Ghép tất cả các hàng dọc lại thành 1 bức ảnh Final
-    final_height = 40 + (224 * len(row_images))
-    final_viz = Image.new('RGB', (224 * 4, final_height), color='white')
-    
+    final_viz = Image.new('RGB', (224 * 4, 40 + (224 * len(row_images))), color='white')
     final_viz.paste(header, (0, 0))
-    y_offset = 40
-    for row_img in row_images:
-        final_viz.paste(row_img, (0, y_offset))
-        y_offset += 224
+    for i, r in enumerate(row_images):
+        final_viz.paste(r, (0, 40 + i * 224))
         
-    final_viz_path = os.path.join(SAVE_DIR, 'multipie_multi_angle_viz.png')
-    final_viz.save(final_viz_path, dpi=(300, 300))
-    print(f"\n[COMPLETED] Multi-PIE Visualization saved at: {final_viz_path}")
+    final_viz.save(os.path.join(args.save_dir, 'multipie_multi_angle_viz.png'))
+    print(f"\n[SUCCESS] Report saved in {args.save_dir}")
 
 if __name__ == '__main__':
     main()

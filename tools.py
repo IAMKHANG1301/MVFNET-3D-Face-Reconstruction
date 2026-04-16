@@ -8,17 +8,18 @@ import math
 import torch
 import os
 import trimesh
-import matplotlib.pyplot as plt # SỬA: Thêm import
-from scipy.spatial import ConvexHull # SỬA: Thêm import
-from scipy.interpolate import interp1d # SỬA: Thêm import
+import matplotlib.pyplot as plt 
+from scipy.spatial import ConvexHull 
+from scipy.interpolate import interp1d 
 from ultralytics import YOLO
 from gfpgan import GFPGANer
+import face_alignment
 
 # --- Cấu hình mô hình bổ trợ ---
 # Tải detector YOLOv11-Face
 face_detector = YOLO('weights/yolo11n-face.pt') 
 
-# Khởi tạo bộ làm nét GFPGAN (chạy trên GPU nếu có)
+# Khởi tạo bộ làm nét GFPGAN 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 face_restorer = GFPGANer(
     model_path='weights/GFPGANv1.4.pth',
@@ -52,21 +53,34 @@ def enhance_face(image_pil):
     except Exception as e:
         print(f"  [!] Warning GFPGAN: {e}")
         return image_pil
+    
 
 def crop_image_yolo(image, res=224):
-    """Crop khuôn mặt bằng YOLOv11-Face"""
+    """Cập nhật hàm để luôn trả về 4 giá trị (Ảnh, Left, Top, Size)"""
+    # Chuyển ảnh sang numpy để YOLO xử lý
     results = face_detector(np.array(image), conf=0.5, verbose=False)
-    if len(results[0].boxes) == 0:
-        return image.resize((res, res), Image.BICUBIC)
     
+    # Trường hợp không tìm thấy mặt: Trả về 4 giá trị None hoặc ảnh mặc định kèm tọa độ 0
+    if len(results[0].boxes) == 0:
+        return None, 0, 0, 0
+    
+    # Lấy tọa độ khung bao từ YOLO
     box = results[0].boxes.xyxy[0].cpu().numpy()
     x1, y1, x2, y2 = box
     center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
-    size = int(max(x2 - x1, y2 - y1) * 1.2)
+    # Tính toán kích thước vùng cắt với margin 1.2
+    size = int(max(x2 - x1, y2 - y1) * 1.2) 
     
+    # Tọa độ góc trái trên của vùng cắt trong ảnh gốc
     left, top = int(center_x - size/2), int(center_y - size/2)
+    
+    # Thực hiện cắt ảnh từ ảnh PIL gốc
     crop_img = image.crop((left, top, left + size, top + size))
-    return crop_img.resize((res, res), Image.BICUBIC)
+    # Thay đổi kích thước về 224x224 cho mô hình
+    resized_img = crop_img.resize((res, res), Image.BICUBIC)
+    
+    # trả về đủ 4 giá trị dưới dạng Tuple
+    return resized_img, left, top, size
 
 def refine_mesh(vertices, triangles):
     """Làm mượt mesh bằng Laplacian Smoothing"""
@@ -140,6 +154,41 @@ def sample_texture_fusion(face_shape, triangles, images, preds):
     final_colors /= (total_weights + 1e-6)
     return np.clip(final_colors, 0, 255).astype(np.uint8)
 
+def crop_image(image, res=224):
+    fa = face_alignment.FaceAlignment(face_alignment.LandmarksType.THREE_D, flip_input=False)
+    pts = fa.get_landmarks(np.array(image))
+    if len(pts) < 1:
+        assert "No face detected!"
+    pts = np.array(pts[0]).astype(np.int32)
+        
+    h = image.size[1]
+    w = image.size[0]
+        # x-width-pts[0,:], y-height-pts[1,:]
+    x_max = np.max(pts[:68, 0])
+    x_min = np.min(pts[:68, 0])
+    y_max = np.max(pts[:68, 1])
+    y_min = np.min(pts[:68, 1])
+    bbox = [y_min, x_min, y_max, x_max]
+    # c (cy, cx)
+    c = [bbox[2] - (bbox[2] - bbox[0]) / 2, bbox[3] - (bbox[3] - bbox[1]) / 2.0]
+    c[0] = c[0] - (bbox[2] - bbox[0]) * 0.12
+    s = (max(bbox[2] - bbox[0], bbox[3] - bbox[1]) * 1.5).astype(np.int32)
+    old_bb = np.array([c[0] - s / 2, c[1] - s / 2, c[0] + s / 2, c[1] + s / 2]).astype(np.int32)
+    crop_img = Image.new('RGB', (s, s))
+    #crop_img = torch.zeros(image.shape[0], s, s, dtype=torch.float32)
+
+    shift_x = 0 - old_bb[1]
+    shift_y = 0 - old_bb[0]
+    old_bb = np.array([max(0, old_bb[0]), max(0, old_bb[1]),
+              min(h, old_bb[2]), min(w, old_bb[3])]).astype(np.int32)
+    hb = old_bb[2] - old_bb[0]
+    wb = old_bb[3] - old_bb[1]
+    new_bb = np.array([max(0, shift_y), max(0, shift_x), max(0, shift_y) + hb, max(0, shift_x) + wb]).astype(np.int32)
+    cache = image.crop((old_bb[1], old_bb[0], old_bb[3], old_bb[2]))
+    crop_img.paste(cache, (new_bb[1], new_bb[0], new_bb[3], new_bb[2]))
+    crop_img = crop_img.resize((res, res), Image.BICUBIC)
+    return crop_img
+
 # --- HÀM LƯU FILE & ĐÁNH GIÁ ---
 
 def write_ply(filename, points=None, mesh=None, colors=None, as_text=True):
@@ -168,19 +217,80 @@ def write_ply(filename, points=None, mesh=None, colors=None, as_text=True):
             f.write(f"3 {mesh[i,0]} {mesh[i,1]} {mesh[i,2]}\n")
     return True
 
+# def calculate_nme(pred_landmarks, gt_landmarks):
+#     min_xy = np.min(gt_landmarks, axis=0)
+#     max_xy = np.max(gt_landmarks, axis=0)
+#     bbox_size = np.sqrt(np.prod(max_xy[:2] - min_xy[:2]))
+#     error = np.mean(np.linalg.norm(pred_landmarks[:, :2] - gt_landmarks[:, :2], axis=1))
+#     return error / bbox_size
+
 def calculate_nme(pred_landmarks, gt_landmarks):
-    # (Giữ nguyên hàm tính NME của bạn)
+    # Sử dụng toàn bộ 68 điểm GT để tính kích thước khung bao chuẩn (normalization factor)
     min_xy = np.min(gt_landmarks, axis=0)
     max_xy = np.max(gt_landmarks, axis=0)
+    # Tính đường chéo hoặc diện tích khung bao làm chuẩn
     bbox_size = np.sqrt(np.prod(max_xy[:2] - min_xy[:2]))
-    error = np.mean(np.linalg.norm(pred_landmarks[:, :2] - gt_landmarks[:, :2], axis=1))
+    
+    # CHỈ TÍNH LỖI TRÊN 51 ĐIỂM (từ index 17 đến 67)
+    # Bỏ qua 17 điểm đầu tiên là đường viền hàm (0-16)
+    pred_inner = pred_landmarks[17:, :2]
+    gt_inner = gt_landmarks[17:, :2]
+    
+    # Tính khoảng cách Euclidean trung bình giữa các cặp điểm nội quan
+    error = np.mean(np.linalg.norm(pred_inner - gt_inner, axis=1))
+    
+    # Trả về giá trị đã chuẩn hóa theo kích thước khuôn mặt
     return error / bbox_size
 
-def plot_ced_curve(nme_list, save_path='result/ced_curve.png'):
-    # (Hàm này giờ đã có plt nên sẽ không lỗi)
-    errors = np.sort(nme_list)
-    ced = np.arange(1, len(errors) + 1) / len(errors)
-    plt.figure()
-    plt.plot(errors, ced)
+def plot_ced_curve(all_nme, save_path):
+    """Vẽ đường cong sai số tích lũy (Cumulative Error Distribution)"""
+    nme_sorted = np.sort(all_nme)
+    # Tính tỉ lệ phần trăm các mẫu có sai số nhỏ hơn ngưỡng x
+    y = np.arange(len(nme_sorted)) / float(len(nme_sorted))
+    
+    plt.figure(figsize=(8, 6))
+    plt.plot(nme_sorted * 100, y, label='MVF-Net (NME-51)', color='blue', linewidth=2)
+    plt.xlabel('Normalized Mean Error (%)', fontsize=12)
+    plt.ylabel('Fraction of Images', fontsize=12)
+    plt.title('CED Curve for AFLW2000-3D', fontsize=14)
+    plt.xlim(0, 15) # Giới hạn khung hình đến 15% lỗi
+    plt.ylim(0, 1)
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.legend()
     plt.savefig(save_path)
     plt.close()
+    print(f"[*] CED Curve saved to: {save_path}")
+
+def plot_error_by_yaw(all_nme, all_yaw, save_path):
+    """Thống kê sai số trung bình dựa trên các khoảng góc quay đầu (Yaw)"""
+    # Chuyển đổi radian sang độ (đối với AFLW2000)
+    abs_yaw = np.abs(np.array(all_yaw)) * 180 / np.pi
+    nme_array = np.array(all_nme) * 100 # Chuyển sang đơn vị %
+    
+    # Chia các nhóm góc nhìn: [0-30], [30-60], [60-90]
+    intervals = [(0, 30), (30, 60), (60, 90)]
+    group_names = ['[0, 30]', '[30, 60]', '[60, 90]']
+    means = []
+    
+    for start, end in intervals:
+        mask = (abs_yaw >= start) & (abs_yaw < end)
+        if np.any(mask):
+            means.append(np.mean(nme_array[mask]))
+        else:
+            means.append(0)
+            
+    # Vẽ biểu đồ cột
+    plt.figure(figsize=(8, 6))
+    bars = plt.bar(group_names, means, color=['#3498db', '#9b59b6', '#e74c3c'], alpha=0.8)
+    plt.ylabel('Mean NME (%)', fontsize=12)
+    plt.xlabel('Absolute Yaw Angle (Degrees)', fontsize=12)
+    plt.title('Mean Error by View Angle (NME-51)', fontsize=14)
+    
+    # Ghi chú giá trị trên đầu mỗi cột
+    for bar in bars:
+        yval = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2, yval + 0.1, f'{yval:.2f}%', ha='center', va='bottom')
+        
+    plt.savefig(save_path)
+    plt.close()
+    print(f"[*] Error by Yaw chart saved to: {save_path}")
