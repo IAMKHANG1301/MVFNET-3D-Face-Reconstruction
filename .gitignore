@@ -23,6 +23,7 @@ gfspan/
 *.zip
 *.rar
 *.7z
+*.pt
 
 # Log và tệp tạm
 *.log
